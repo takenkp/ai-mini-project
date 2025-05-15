@@ -124,8 +124,8 @@ final_report	요약 및 Markdown 형식 보고서
 │   └── daglo_guide.pdf
 │   └── daglo_terms.txt
 │
-├── guidelines/                 # 윤리가이드라인 요약본 (EU AI Act 등)
-│   └── eu_ai_act_summary.md
+├── guidelines/                 # 윤리가이드라인 요약본 (OECD)
+│   └── oecd_summary.md
 │
 ├── prompts/                    # 각 에이전트별 프롬프트 템플릿
 │   └── service_analysis.txt
