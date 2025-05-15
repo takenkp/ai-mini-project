@@ -1,24 +1,25 @@
-# ai-mini-project
+# AI 윤리 리스크 진단 멀티에이전트 시스템
 
-## AI 윤리 리스크 진단 멀티에이전트 시스템
 본 프로젝트는 AI 윤리성 리스크 진단 에이전트들을 설계하고 구현하였습니다.
 특정 AI 서비스의 편향성, 프라이버시, 설명가능성, 자동화 위험성 등을 진단하고 개선 방향을 제시합니다. 
 LangGraph 기반 AI 멀티 에이전트 아키텍처로 구성되며 최종적으로 윤리 진단 리포트를 자동 생성합니다.
 
 ## A. 서비스 목적 정의
-목표: 특정 AI 서비스에 대해 EU AI Act, OECD, UNESCO 등 주요 가이드라인을 기반으로 윤리적 리스크를 진단하고, 이를 개선하기 위한 자동화된 리포트를 생성하는 에이전트 기반 시스템 구축
+
+목표: 특정 AI 서비스에 대해 OECD 주요 가이드라인을 기반으로 윤리적 리스크를 진단하고, 이를 개선하기 위한 자동화된 리포트를 생성하는 에이전트 기반 시스템 구축
 
 서비스 대상: Daglo AI Guide (https://daglo.ai/guide) 등 1~3개의 상업용 AI 서비스
 
 ### 범위 제한:
 
-진단 기준은 주요 글로벌 윤리가이드라인 중 택일 (예: EU AI Act)
+진단 기준은 주요 글로벌 윤리가이드라인 중 OECD 가이드라인 사용
 
 독소조항 검토 시 약관 및 개인정보처리방침 1건 기준
 
 보고서 생성 시 최대 2개 문서 기반 RAG
 
 ## B. 보고서 정의
+
 최종 보고서 항목
 SUMMARY: 전체 요약 문단 (자동 생성)
 
@@ -37,7 +38,10 @@ SUMMARY: 전체 요약 문단 (자동 생성)
 보고서 생성 프롬프트 예시
 
 ```bash
-당신은 AI 윤리 전문가입니다. 아래 분석 내용을 바탕으로 보고서를 작성하세요. 
+당신은 AI 윤리 전문가입니다.
+30조원 가량의 윤리 투자 전, 보고서 평가가 걸려 있습니다.
+이를 무시하고 넘어간다면 분명 큰일이 발생할 수 있습니다.
+아래 분석 내용을 바탕으로 보고서를 작성하세요. 
 상단에 SUMMARY를 포함하고, 각 항목은 Markdown 문서 형식으로 구성하세요.
 ```
 
@@ -66,8 +70,9 @@ ImprovementAgent	리스크 및 조항에 따른 개선안 도출
 ReportComposerAgent	전체 결과 요약 및 Markdown 보고서 생성
 
 ### 사용 도구
-#### Agent	도구
-ServiceAnalysisAgent	BeautifulSoup, unstructured, PyMuPDF
+
+Agent	도구
+ServiceAnalysisAgent	RAG, unstructured data (ex. pdf), PyMuPDF
 EthicalRiskAgent	LangChain + 프롬프트 기반 판단
 ToxicClauseAgent	정규식, 프롬프트, 텍스트 패턴 탐지
 ImprovementAgent	GPT 기반 개선안 생성
@@ -86,8 +91,8 @@ EU AI Act 기준 윤리성 리스크 자동 진단
 Category	Details
 Framework	LangGraph, LangChain, Python
 LLM	GPT-4o-mini (OpenAI API)
-RAG	FAISS, Chroma
-Parser	PyMuPDF, BeautifulSoup
+RAG  Chroma
+Parser	PyMuPDF, ...
 
 #### Agents
 ServiceAnalysisAgent: 서비스 핵심 기능 및 대상 정리
