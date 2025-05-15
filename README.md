@@ -46,6 +46,8 @@ SUMMARY: 전체 요약 문단 (자동 생성)
 ```
 
 ## C. Architecture 정의
+![image](https://github.com/user-attachments/assets/e73162b3-3f2c-4924-8d9c-c1ef87f60f3a)
+
 
 ### Graph 구조
 ```bash
