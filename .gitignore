@@ -4,7 +4,7 @@ alembic
 alembic.ini
 # vector_db 폴더 안에 있는 SQLite 및 컬렉션 캐시 무시
 vector_db/chroma.sqlite3
-vector_db/*/
+vectorstore/*/
 
 ### Python ###
 # Byte-compiled / optimized / DLL files

@@ -1,120 +1,117 @@
+import os
+import json
+import re
 from typing import Dict, Any, List
+
 from langchain.schema import HumanMessage, SystemMessage
 from langchain.schema.runnable import Runnable
-import textwrap
+# import textwrap # 사용자 프롬프트가 복잡하면 textwrap 사용 가능
+
+# prompts 폴더에서 프롬프트를 로드하는 함수
+def load_prompt_from_file(file_path: str) -> str:
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        agent_name = os.path.splitext(os.path.basename(__file__))[0] 
+        # 호출하는 __init__에서 FileNotFoundError를 발생시키므로, 여기서는 빈 문자열 반환 후 확인
+        print(f"경고({agent_name}): 프롬프트 파일을 찾을 수 없습니다 - {file_path}")
+        return "" 
+    except Exception as e:
+        agent_name = os.path.splitext(os.path.basename(__file__))[0]
+        print(f"오류({agent_name}): 프롬프트 파일 로드 중 문제 발생 - {file_path}: {e}")
+        return ""
 
 class ImprovementAgent:
-    """개선안 제시 에이전트
+    """개선안 제시 에이전트"""
     
-    윤리적 리스크와 독소조항에 대한 개선 방안을 제시하는 에이전트
-    """
-    
-    def __init__(self, llm: Runnable):
-        """초기화
-        
-        Args:
-            llm: 사용할 LLM 모델
-        """
+    def __init__(self, llm: Runnable, prompt_dir: str = "./prompts"):
         self.llm = llm
-        
-        # 시스템 프롬프트 설정
-        self.system_prompt = """
-        당신은 AI 윤리 및 법률 전문가입니다. 주어진 윤리적 리스크와 독소조항에 대한 구체적인 개선 방안을 제시해야 합니다.
-        
-        각 리스크 항목별로 실행 가능한 개선 방안을 제시하고, 독소조항에 대해서는 공정하고 투명한 대안을 제안해주세요.
-        개선 방안은 구체적이고 실용적이어야 합니다.
-        
-        결과는 JSON 형식으로 반환해주세요.
-        """
-    
+        agent_name = self.__class__.__name__
+
+        system_prompt_path = os.path.join(prompt_dir, "improvement_system.txt")
+        user_prompt_template_path = os.path.join(prompt_dir, "improvement_user.txt")
+
+        self.system_prompt = load_prompt_from_file(system_prompt_path)
+        self.user_prompt_template = load_prompt_from_file(user_prompt_template_path)
+
+        if not self.system_prompt:
+            raise FileNotFoundError(f"{agent_name}: 시스템 프롬프트 파일을 로드할 수 없습니다. 경로: {system_prompt_path}")
+        if not self.user_prompt_template:
+            raise FileNotFoundError(f"{agent_name}: 사용자 프롬프트 템플릿 파일을 로드할 수 없습니다. 경로: {user_prompt_template_path}")
+
     def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """에이전트 실행
-        
-        Args:
-            state: 현재 상태
-            
-        Returns:
-            업데이트된 상태
-        """
-        # 입력 데이터 추출
+        print("ImprovementAgent 실행 시작...")
         ethical_risks = state.get("ethical_risks", {})
-        toxic_clauses = state.get("toxic_clauses", [])
-        
-        # 리스크 정보 추출
-        bias_risk = ethical_risks.get("bias_risk", "알 수 없음")
-        privacy_risk = ethical_risks.get("privacy_risk", "알 수 없음")
-        explainability_risk = ethical_risks.get("explainability_risk", "알 수 없음")
-        automation_risk = ethical_risks.get("automation_risk", "알 수 없음")
-        
-        # 독소조항 텍스트 추출
-        toxic_clause_texts = [clause.get("clause", "") for clause in toxic_clauses]
-        
-        # 프롬프트 구성
-        human_prompt = textwrap.dedent("""
-            분석된 윤리적 리스크:
-            - 편향성 리스크: {bias_risk}
-            - 프라이버시 리스크: {privacy_risk}
-            - 설명가능성 리스크: {explainability_risk}
-            - 자동화 리스크: {automation_risk}
+        toxic_clauses_list = state.get("toxic_clauses", []) 
+        overall_clause_risk = state.get("overall_clause_risk", "평가 정보 없음")
 
-            탐지된 독소조항:
-            {toxic_clauses}
+        # 이전 단계에서 오류가 있었다면, 해당 오류를 포함하여 개선안 생성 시도 또는 오류 반환
+        if state.get("error_message"):
+            print(f"ImprovementAgent: 이전 단계 오류로 인해 개선안 생성 제한됨 - {state.get('error_message')}")
+            # 오류가 있을 경우, 개선안 필드에 오류 정보 추가 또는 빈 값 반환
+            return {"recommendations": {"error": "선행 작업 오류로 개선안 생성 불가", "details": state.get("error_message")}}
 
-            위 리스크와 독소조항에 대한 구체적인 개선 방안을 다음 JSON 형식으로 제시해주세요:
 
-            ```json
-            {{
-            "recommendations": {{
-                "bias_risk": "편향성 리스크 개선 방안",
-                "privacy_risk": "프라이버시 리스크 개선 방안",
-                "explainability_risk": "설명가능성 리스크 개선 방안",
-                "automation_risk": "자동화 리스크 개선 방안",
-                "toxic_clauses": "독소조항 개선 방안"
-            }}
-            }}
-            ```
-        """).format(
-            bias_risk=bias_risk,
-            privacy_risk=privacy_risk,
-            explainability_risk=explainability_risk,
-            automation_risk=automation_risk,
-            toxic_clauses="\n".join([f"- {clause}" for clause in toxic_clause_texts])
+        if not ethical_risks and not toxic_clauses_list and overall_clause_risk == "평가 정보 없음":
+            print("ImprovementAgent 경고: 윤리 리스크 및 독소조항 정보가 없어 개선안을 생성할 수 없습니다.")
+            return {"recommendations": {"info": "분석된 리스크 또는 독소조항 정보가 없어 개선안을 생성하지 않았습니다."}}
+
+        # 프롬프트에 전달할 독소조항 목록 문자열 생성
+        toxic_clauses_str_list = []
+        if isinstance(toxic_clauses_list, list) and toxic_clauses_list:
+            for i, item in enumerate(toxic_clauses_list):
+                if isinstance(item, dict):
+                    clause_text = item.get('clause', '내용 없음')
+                    reason_text = item.get('risk_reason', '이유 없음')
+                    toxic_clauses_str_list.append(f"  {i+1}. 조항: \"{clause_text}\"\n     위험 이유: {reason_text}")
+                else: # 예상치 못한 형식일 경우 문자열로 변환
+                    toxic_clauses_str_list.append(f"  {i+1}. {str(item)}")
+        
+        formatted_toxic_clauses = "\n".join(toxic_clauses_str_list) if toxic_clauses_str_list else "탐지된 특정 독소조항 없음."
+
+        # ethical_risks에서 justification이 없을 경우 대비
+        justifications = ethical_risks.get("justification", {})
+
+        human_prompt = self.user_prompt_template.format(
+            bias_risk_level=ethical_risks.get("bias_risk", "정보 없음"),
+            bias_risk_justification=justifications.get("bias_risk", "상세 근거 없음"),
+            privacy_risk_level=ethical_risks.get("privacy_risk", "정보 없음"),
+            privacy_risk_justification=justifications.get("privacy_risk", "상세 근거 없음"),
+            explainability_risk_level=ethical_risks.get("explainability_risk", "정보 없음"),
+            explainability_risk_justification=justifications.get("explainability_risk", "상세 근거 없음"),
+            automation_risk_level=ethical_risks.get("automation_risk", "정보 없음"),
+            automation_risk_justification=justifications.get("automation_risk", "상세 근거 없음"),
+            overall_clause_risk_level=overall_clause_risk,
+            toxic_clauses_list=formatted_toxic_clauses
         )
         
-        # LLM 호출
+        print("ImprovementAgent: LLM 호출 중...")
         messages = [
             SystemMessage(content=self.system_prompt),
             HumanMessage(content=human_prompt)
         ]
         response = self.llm.invoke(messages)
         
-        # 응답에서 JSON 추출
-        import json
-        import re
-        
-        # JSON 형식 추출 (간단한 정규식 사용)
-        json_match = re.search(r'```json\s*({.*?})\s*```', response.content, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(1)
-        else:
-            json_str = response.content
-        
+        recommendations_output = {}
         try:
-            # JSON 파싱
-            improvement_result = json.loads(json_str)
-        except json.JSONDecodeError:
-            # 파싱 실패 시 기본값 설정
-            improvement_result = {
-                "recommendations": {
-                    "bias_risk": "사용자 그룹별 테스트 및 결과 로그 분석을 통해 편향 여부 검증",
-                    "privacy_risk": "데이터 최소 수집 및 삭제 주기 명시",
-                    "explainability_risk": "결과 생성 근거를 사용자에게 제공하는 UI 설계",
-                    "automation_risk": "자동화된 추천 결과에 수동 검토 옵션 추가",
-                    "toxic_clauses": "약관에서 사용자 권리를 침해하는 조항 제거 또는 명확화"
-                }
-            }
+            json_match = re.search(r'```json\s*(\{.*?\})\s*```', response.content, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+                recommendations_output = json.loads(json_str)
+                print("ImprovementAgent: LLM으로부터 JSON 응답 파싱 성공.")
+            else: # JSON 블록이 없을 경우, 전체 내용을 파싱 시도 (덜 안정적)
+                print("ImprovementAgent 경고: LLM 응답에서 명확한 JSON 블록을 찾지 못했습니다. 전체 응답 파싱 시도.")
+                recommendations_output = json.loads(response.content)
+        except json.JSONDecodeError as e:
+            error_msg = f"ImprovementAgent 오류: LLM 응답 JSON 파싱 실패 - {e}"
+            print(error_msg)
+            print(f"LLM 원본 응답 (일부):\n{response.content[:500].replace(chr(0), '')}...")
+            # 상태에 오류 메시지 추가 (기존 오류 메시지가 있다면 이어붙임)
+            current_error = state.get("error_message", "")
+            return {"error_message": (current_error + "; " if current_error else "") + error_msg, 
+                    "recommendations": {"error": "개선안 JSON 파싱 실패"}}
         
-        # 상태 업데이트
-        state["recommendations"] = improvement_result.get("recommendations", {})
-        
-        return state
+        print(f"ImprovementAgent: 생성된 개선안 - {recommendations_output}")
+        # recommendations 키 아래의 내용을 저장해야 함 (프롬프트 출력 형식에 따름)
+        return {"recommendations": recommendations_output.get("recommendations", {})}

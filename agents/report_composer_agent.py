@@ -1,158 +1,167 @@
-from typing import Dict, Any
+import os
+import json
+import re
+from typing import Dict, Any, List
+from datetime import datetime
+
 from langchain.schema import HumanMessage, SystemMessage
 from langchain.schema.runnable import Runnable
-import json
-import os
-from datetime import datetime
-import textwrap
+# import textwrap # 사용자 프롬프트가 매우 길 경우 사용 가능
+
+# prompts 폴더에서 프롬프트를 로드하는 함수
+def load_prompt_from_file(file_path: str) -> str:
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        agent_name = os.path.splitext(os.path.basename(__file__))[0]
+        print(f"경고({agent_name}): 프롬프트 파일을 찾을 수 없습니다 - {file_path}")
+        return ""
+    except Exception as e:
+        agent_name = os.path.splitext(os.path.basename(__file__))[0]
+        print(f"오류({agent_name}): 프롬프트 파일 로드 중 문제 발생 - {file_path}: {e}")
+        return ""
 
 class ReportComposerAgent:
-    """보고서 작성 에이전트
+    """보고서 작성 에이전트"""
     
-    분석 결과를 종합하여 최종 보고서를 생성하는 에이전트
-    """
-    
-    def __init__(self, llm: Runnable):
-        """초기화
-        
-        Args:
-            llm: 사용할 LLM 모델
-        """
+    def __init__(self, llm: Runnable, prompt_dir: str = "./prompts", output_dir: str = "./outputs"):
         self.llm = llm
+        self.output_dir = output_dir 
+        agent_name = self.__class__.__name__
+
+        system_prompt_path = os.path.join(prompt_dir, "report_composer_system.txt")
+        user_prompt_template_path = os.path.join(prompt_dir, "report_composer_user.txt")
+
+        self.system_prompt = load_prompt_from_file(system_prompt_path)
+        self.user_prompt_template = load_prompt_from_file(user_prompt_template_path)
+
+        if not self.system_prompt:
+            raise FileNotFoundError(f"{agent_name}: 시스템 프롬프트 파일을 로드할 수 없습니다. 경로: {system_prompt_path}")
+        if not self.user_prompt_template:
+            raise FileNotFoundError(f"{agent_name}: 사용자 프롬프트 템플릿 파일을 로드할 수 없습니다. 경로: {user_prompt_template_path}")
+
+    def _format_state_for_prompt(self, state: Dict[str, Any]) -> Dict[str, str]:
+        """LLM 프롬프트에 전달하기 위해 상태 정보를 문자열로 포맷합니다."""
+        service_info = state.get("service_info", {"error": "서비스 정보가 없습니다.", "service_name": "UnknownService"})
+        ethical_risks = state.get("ethical_risks", {"error": "윤리 리스크 정보가 없습니다."})
         
-        # 시스템 프롬프트 설정
-        self.system_prompt = """
-        당신은 AI 윤리 전문가입니다.
-        30조원 가량의 윤리 투자 전, 보고서 평가가 걸려 있습니다.
-        이를 무시하고 넘어간다면 분명 큰일이 발생할 수 있습니다.
-        아래 분석 내용을 바탕으로 보고서를 작성하세요. 
-        상단에 SUMMARY를 포함하고, 각 항목은 Markdown 문서 형식으로 구성하세요.
-        
-        보고서는 다음 항목을 포함해야 합니다:
-        1. 서비스 개요
-        2. 윤리성 리스크 평가 (Bias, Privacy, Explainability, Automation Risk)
-        3. 독소조항 목록 및 평가
-        4. 서비스 개선 방향 제안
-        5. 사용된 윤리 가이드라인 명세
-        """
-    
+        toxic_clauses_data = {
+            "toxic_clauses": state.get("toxic_clauses", []), # 기본값 빈 리스트
+            "overall_clause_risk": state.get("overall_clause_risk", "정보 없음")
+        }
+        # toxic_clauses가 비어있으면 "탐지된 독소조항 없음"으로 표시되도록 프롬프트에서 처리하거나 여기서 가공
+        if not toxic_clauses_data["toxic_clauses"]:
+             toxic_clauses_data["toxic_clauses"] = [{"clause": "탐지된 특정 독소조항 없음", "risk_reason": "-"}]
+
+
+        recommendations = state.get("recommendations", {"error": "개선안 정보가 없습니다."})
+
+        return {
+            "service_info_json_str": json.dumps(service_info, ensure_ascii=False, indent=2),
+            "ethical_risks_json_str": json.dumps(ethical_risks, ensure_ascii=False, indent=2),
+            "toxic_clauses_json_str": json.dumps(toxic_clauses_data, ensure_ascii=False, indent=2),
+            "recommendations_json_str": json.dumps(recommendations, ensure_ascii=False, indent=2),
+        }
+
     def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """에이전트 실행
+        print("ReportComposerAgent 실행 시작...")
         
-        Args:
-            state: 현재 상태
+        # 이전 단계에서 심각한 오류가 있었는지 확인
+        # error_message는 주로 파이프라인 레벨의 오류나 join 타임아웃 등에 사용됨
+        # 각 에이전트의 결과 내에도 error 필드가 있을 수 있음 (예: ethical_risks.get("error"))
+        if state.get("error_message"):
+            error_summary = f"진단 프로세스 중 오류 발생: {state.get('error_message')}"
+            print(f"ReportComposerAgent: 이전 오류로 인해 간소화된 오류 보고서 생성 - {error_summary}")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # 서비스 이름이 service_info에 없을 수 있으므로 기본값 사용
+            service_name_val = state.get("service_info", {}).get("service_name", "unknown_service")
+            service_name_prefix = service_name_val.replace(" ", "_")[:30] if service_name_val else "unknown_service"
             
-        Returns:
-            업데이트된 상태
-        """
-        # 입력 데이터 추출
-        service_info = state.get("service_info", {})
-        ethical_risks = state.get("ethical_risks", {})
-        toxic_clauses = state.get("toxic_clauses", [])
-        recommendations = state.get("recommendations", {})
+            error_report_filename = f"error_report_{service_name_prefix}_{timestamp}.md"
+            error_report_md_path = os.path.join(self.output_dir, error_report_filename)
+            
+            error_report_content = f"# AI 윤리 리스크 진단 오류 보고서\n\n## 오류 요약\n{error_summary}\n\n## 현재까지 수집된 정보 (일부)\n"
+            # 상태에 있는 주요 정보들을 최대한 포함
+            if state.get("service_info"): error_report_content += f"\n### 서비스 정보\n```json\n{json.dumps(state.get('service_info'), ensure_ascii=False, indent=2)}\n```\n"
+            if state.get("ethical_risks"): error_report_content += f"\n### 윤리 리스크\n```json\n{json.dumps(state.get('ethical_risks'), ensure_ascii=False, indent=2)}\n```\n"
+            # toxic_clauses와 overall_clause_risk를 함께 표시
+            toxic_data_for_error_report = {
+                "toxic_clauses": state.get("toxic_clauses", []),
+                "overall_clause_risk": state.get("overall_clause_risk", "정보 없음")
+            }
+            error_report_content += f"\n### 독소 조항\n```json\n{json.dumps(toxic_data_for_error_report, ensure_ascii=False, indent=2)}\n```\n"
+            if state.get("recommendations"): error_report_content += f"\n### 개선안\n```json\n{json.dumps(state.get('recommendations'), ensure_ascii=False, indent=2)}\n```\n"
+            
+            os.makedirs(self.output_dir, exist_ok=True)
+            try:
+                with open(error_report_md_path, "w", encoding="utf-8") as f:
+                    f.write(error_report_content)
+                print(f"ReportComposerAgent: 오류 보고서 저장 완료 - {error_report_md_path}")
+            except Exception as e_save:
+                 print(f"ReportComposerAgent 오류: 오류 보고서 저장 실패 - {e_save}")
+                 error_report_md_path = None # 저장 실패 시 경로 없음
+
+            return {
+                "final_report": {
+                    "summary": error_summary,
+                    "report_markdown": error_report_md_path,
+                    "status": "Error",
+                    "error_details": state.get("error_message")
+                }
+            }
+
+        prompt_inputs = self._format_state_for_prompt(state)
+        human_prompt = self.user_prompt_template.format(**prompt_inputs)
         
-        # 프롬프트 구성
-        toxic_clause_lines = "\n".join(
-            [f"- {clause.get('clause', '')}: {clause.get('risk_reason', '')}" for clause in toxic_clauses]
-        )
-
-        human_prompt = textwrap.dedent("""
-            ## 서비스 정보
-            서비스 이름: {service_name}
-            서비스 설명: {description}
-            핵심 기능: {core_features}
-            대상 사용자: {target_users}
-            수집 데이터: {collected_data_types}
-
-            ## 윤리적 리스크 평가
-            편향성 리스크: {bias_risk}
-            프라이버시 리스크: {privacy_risk}
-            설명가능성 리스크: {explainability_risk}
-            자동화 리스크: {automation_risk}
-
-            리스크 평가 근거:
-            - 편향성: {justification_bias}
-            - 프라이버시: {justification_privacy}
-            - 설명가능성: {justification_explainability}
-            - 자동화: {justification_automation}
-
-            ## 독소조항 분석
-            독소조항 목록:
-            {toxic_clause_lines}
-
-            ## 개선 방안
-            편향성 개선: {rec_bias}
-            프라이버시 개선: {rec_privacy}
-            설명가능성 개선: {rec_explain}
-            자동화 개선: {rec_auto}
-            독소조항 개선: {rec_toxic}
-
-            ## 적용된 윤리 가이드라인
-            OECD AI 가이드라인
-
-            위 정보를 바탕으로 AI 윤리 리스크 진단 보고서를 작성해주세요. 보고서는 Markdown 형식으로 작성하고, 상단에 전체 내용을 요약한 SUMMARY 섹션을 포함해야 합니다.
-        """).format(
-            service_name=service_info.get("service_name", "알 수 없음"),
-            description=service_info.get("description", "알 수 없음"),
-            core_features=", ".join(service_info.get("core_features", ["알 수 없음"])),
-            target_users=", ".join(service_info.get("target_users", ["알 수 없음"])),
-            collected_data_types=", ".join(service_info.get("collected_data_types", ["알 수 없음"])),
-
-            bias_risk=ethical_risks.get("bias_risk", "알 수 없음"),
-            privacy_risk=ethical_risks.get("privacy_risk", "알 수 없음"),
-            explainability_risk=ethical_risks.get("explainability_risk", "알 수 없음"),
-            automation_risk=ethical_risks.get("automation_risk", "알 수 없음"),
-
-            justification_bias=ethical_risks.get("justification", {}).get("bias_risk", "알 수 없음"),
-            justification_privacy=ethical_risks.get("justification", {}).get("privacy_risk", "알 수 없음"),
-            justification_explainability=ethical_risks.get("justification", {}).get("explainability_risk", "알 수 없음"),
-            justification_automation=ethical_risks.get("justification", {}).get("automation_risk", "알 수 없음"),
-
-            toxic_clause_lines=toxic_clause_lines,
-
-            rec_bias=recommendations.get("bias_risk", "알 수 없음"),
-            rec_privacy=recommendations.get("privacy_risk", "알 수 없음"),
-            rec_explain=recommendations.get("explainability_risk", "알 수 없음"),
-            rec_auto=recommendations.get("automation_risk", "알 수 없음"),
-            rec_toxic=recommendations.get("toxic_clauses", "알 수 없음")
-        )
-                
-        # LLM 호출
+        print("ReportComposerAgent: LLM 호출 중 (최종 보고서 생성)...")
         messages = [
             SystemMessage(content=self.system_prompt),
             HumanMessage(content=human_prompt)
         ]
         response = self.llm.invoke(messages)
         
-        # 보고서 내용 추출
-        report_content = response.content
+        report_content_markdown = response.content.replace(chr(0), '') # NULL 바이트 제거
         
-        # 요약 추출 (간단한 정규식 사용)
-        import re
-        summary_match = re.search(r'SUMMARY[:\s]*(.*?)(?:\n\n|\n#)', report_content, re.DOTALL)
-        summary = summary_match.group(1).strip() if summary_match else "요약 정보를 찾을 수 없습니다."
-        
-        # 파일 저장 경로 설정
+        summary = "요약 정보를 찾을 수 없습니다."
+        # SUMMARY 태그가 대소문자 구분 없이, 콜론 뒤 공백 유무에 관계없이, 줄바꿈 전까지 매칭하도록 수정
+        summary_match = re.search(r'SUMMARY\s*:\s*(.*?)(?=\n\n##|\n\n#|\Z)', report_content_markdown, re.DOTALL | re.IGNORECASE)
+        if summary_match:
+            summary = summary_match.group(1).strip()
+        else:
+            summary_lines = report_content_markdown.split('\n')
+            summary_candidate = "\n".join(line for line in summary_lines[:10] if line.strip() and not line.strip().startswith('#'))
+            summary = summary_candidate if summary_candidate else "보고서 요약 자동 추출 실패."
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report_markdown_path = f"./outputs/daglo_ethics_report_{timestamp}.md"
-        report_json_path = f"./outputs/daglo_ethics_report_{timestamp}.json"
+        service_name_val = state.get("service_info", {}).get("service_name", "unknown_service")
+        service_name_prefix = service_name_val.replace(" ", "_").replace("/", "_")[:30] if service_name_val else "unknown_service" # 파일명에 부적절한 문자 제거
         
-        # 출력 디렉토리 확인 및 생성
-        os.makedirs("./outputs", exist_ok=True)
+        report_markdown_filename = f"ethics_report_{service_name_prefix}_{timestamp}.md"
+        report_markdown_path = os.path.join(self.output_dir, report_markdown_filename)
         
-        # Markdown 파일 저장
-        with open(report_markdown_path, "w", encoding="utf-8") as f:
-            f.write(report_content)
+        os.makedirs(self.output_dir, exist_ok=True)
+        try:
+            with open(report_markdown_path, "w", encoding="utf-8") as f:
+                f.write(report_content_markdown)
+            print(f"ReportComposerAgent: Markdown 보고서 저장 완료 - {report_markdown_path}")
+        except Exception as e:
+            print(f"ReportComposerAgent 오류: Markdown 보고서 저장 실패 - {e}")
+            return {
+                "final_report": {
+                    "summary": "보고서 생성은 성공했으나 파일 저장 실패",
+                    "report_markdown": None, # 저장 실패
+                    "status": "Partial Success (Save Failed)",
+                    "error_details": f"Markdown 파일 저장 실패: {e}"
+                },
+                # 이전 단계의 오류가 없었으므로 error_message는 설정하지 않거나, 파일 저장 오류만 기록
+                 "error_message": state.get("error_message","") + f"; Report File Save Failed: {str(e)}"
+            }
         
-        # JSON 파일 저장 (전체 상태)
-        with open(report_json_path, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-        
-        # 상태 업데이트
-        state["final_report"] = {
-            "summary": summary,
-            "report_markdown": report_markdown_path,
-            "report_json": report_json_path
+        return {
+            "final_report": {
+                "summary": summary,
+                "report_markdown": report_markdown_path,
+                "status": "Success"
+            }
         }
-        
-        return state

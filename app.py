@@ -1,107 +1,210 @@
 import os
 import json
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
+import argparse
+import glob
+
 from langchain_openai import ChatOpenAI
-from langchain.schema import HumanMessage, SystemMessage
-from langgraph.graph import StateGraph, END
-from agents.service_analysis_agent import ServiceAnalysisAgent
-from agents.ethical_risk_agent import EthicalRiskAgent
-from agents.toxic_clause_agent import ToxicClauseAgent
-from agents.improvement_agent import ImprovementAgent
-from agents.report_composer_agent import ReportComposerAgent
 from dotenv import load_dotenv
 
-# 환경 변수 설정 (실제 사용 시 .env 파일 또는 환경 변수로 설정)
+from graph import build_ethics_assessment_graph, State 
+from indexing.retriever import build_ensemble_retriever 
+
 load_dotenv()
 
-# 상태 타입 정의
-StateType = Dict[str, Any]
+def run_ethics_assessment_pipeline(
+    service_data_dir: str, 
+    guideline_doc_paths: Optional[List[str]] = None, 
+    service_url: Optional[str] = None,
+    retriever_k_results: int = 3,
+    output_dir: str = "./outputs", # app.py에서 output_dir을 graph builder에 전달
+    guideline_keyword: str = "OECD" 
+    ):
+    print(f"AI 윤리 리스크 진단 파이프라인 시작 (대상 서비스 폴더: {service_data_dir})...")
 
-# 기본 LLM 모델 설정
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
+    if not os.path.exists(service_data_dir) or not os.path.isdir(service_data_dir):
+        print(f"오류: 서비스 데이터 디렉토리 '{service_data_dir}'를 찾을 수 없습니다.")
+        return {"error": f"Service data directory not found: {service_data_dir}"}
 
-# 에이전트 초기화
-service_analysis_agent = ServiceAnalysisAgent(llm=llm)
-ethical_risk_agent = EthicalRiskAgent(llm=llm)
-toxic_clause_agent = ToxicClauseAgent(llm=llm)
-improvement_agent = ImprovementAgent(llm=llm)
-report_composer_agent = ReportComposerAgent(llm=llm)
+    service_pdf_paths = glob.glob(os.path.join(service_data_dir, "*.pdf"))
+    if not service_pdf_paths:
+        print(f"경고: '{service_data_dir}' 내에 분석할 서비스 PDF 문서가 없습니다.")
 
-# 그래프 정의
-def build_graph():
-    # 상태 그래프 생성
-    workflow = StateGraph(StateType)
+    all_document_paths = list(set(service_pdf_paths + (guideline_doc_paths if guideline_doc_paths else [])))
+    if not all_document_paths:
+         print(f"경고: 분석할 PDF 문서(서비스 또는 가이드라인)가 전혀 없습니다.")
     
-    # 노드 추가
-    workflow.set_entry_point("service_analysis")
+    service_url_to_analyze = service_url if service_url is not None else ""
+    if not service_url_to_analyze and not all_document_paths:
+        print("오류: 서비스 URL 또는 분석 대상 PDF 문서(서비스 또는 가이드라인) 중 하나 이상은 제공되어야 합니다.")
+        return {"error": "Insufficient input for analysis."}
+        
+    print("LLM 초기화 중 (gpt-4o-mini)...")
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2, request_timeout=120, max_retries=2)
 
-    workflow.add_node("service_analysis", service_analysis_agent)
-    workflow.add_node("ethical_risk", ethical_risk_agent)
-    workflow.add_node("toxic_clause", toxic_clause_agent)
-    workflow.add_node("improvement", improvement_agent)
-    workflow.add_node("report_composer", report_composer_agent)
-    
-    # 엣지 추가 (순차적 플로우)
-    workflow.add_edge("service_analysis", "ethical_risk")
-    workflow.add_edge("ethical_risk", "toxic_clause")
-    workflow.add_edge("toxic_clause", "improvement")
-    workflow.add_edge("improvement", "report_composer")
-    workflow.add_edge("report_composer", END)
-    
-    # 컴파일
-    return workflow.compile()
+    service_name_for_db = os.path.basename(os.path.normpath(service_data_dir))
+    chroma_persist_dir = os.path.join("./vectorstore", f"chroma_{service_name_for_db}") 
+    os.makedirs(os.path.dirname(chroma_persist_dir), exist_ok=True)
 
-# 메인 실행 함수
-def run_ethics_assessment(service_url: str, documents: List[str], terms_text: str, privacy_policy_text: str):
-    # 그래프 빌드
-    graph = build_graph()
-    
-    # 초기 상태 설정
-    initial_state = {
-        "service_url": service_url,
-        "documents": documents,
-        "terms_text": terms_text,
-        "privacy_policy_text": privacy_policy_text,
-        "service_info": {},
-        "ethical_risks": {},
-        "toxic_clauses": [],
-        "recommendations": {},
-        "final_report": {}
+    print(f"Retriever 초기화 중 (k={retriever_k_results}, PDF 소스: {service_data_dir} 및 가이드라인, Chroma DB: {chroma_persist_dir})...")
+    retriever_instance = None
+    if all_document_paths: 
+        try:
+            retriever_instance = build_ensemble_retriever(
+                pdf_dir=service_data_dir, 
+                chroma_persist_dir=chroma_persist_dir,
+                k_results=retriever_k_results
+            )
+            if retriever_instance is None:
+                print(f"경고: Retriever 초기화 실패. '{service_data_dir}'에 대한 인덱싱이 필요할 수 있습니다.")
+        except Exception as e:
+            print(f"오류: Retriever 생성 중 예외 발생 - {e}. RAG 기능이 제한될 수 있습니다.")
+    else:
+        print(f"정보: 분석할 PDF 문서가 없어 Retriever를 초기화하지 않습니다.")
+
+    print("진단 워크플로우 그래프 빌드 중...")
+    graph = None
+    try:
+        graph = build_ethics_assessment_graph(
+            llm=llm, 
+            retriever_instance=retriever_instance,
+            guideline_keyword_for_ethics=guideline_keyword,
+            report_output_dir=output_dir # ReportComposerAgent에 output_dir 전달
+        )
+    except FileNotFoundError as e: 
+        print(f"오류: 그래프 빌드 실패 (필수 프롬프트 파일 누락 가능성) - {e}")
+        return {"error": f"Graph build failed due to missing file: {e}"}
+    except Exception as e:
+        print(f"오류: 그래프 빌드 중 예기치 않은 오류 발생 - {e}")
+        return {"error": f"Unexpected error during graph build: {e}"}
+
+    if graph is None: 
+        return {"error": "Graph compilation failed."}
+
+    initial_state: State = {
+        "service_url": service_url_to_analyze,
+        "documents": all_document_paths, 
+        "service_info": {}, 
+        "ethical_risks": {}, 
+        "toxic_clauses": [], 
+        "overall_clause_risk": "", 
+        "recommendations": {}, 
+        "final_report": {},
+        "ethical_risk_done": False, 
+        "toxic_clause_done": False,
+        "join_attempt_count": 0, 
+        "error_message": None 
     }
+    print(f"초기 상태 설정 완료: URL='{service_url_to_analyze}', 전체 문서 수={len(all_document_paths)}")
     
-    # 그래프 실행
-    result = graph.invoke(initial_state)
-    
-    # 결과 반환
-    return result
+    print("진단 워크플로우 실행 시작...")
+    final_state = None
+    try:
+        final_state = graph.invoke(initial_state, config={'recursion_limit': 150})
+    except Exception as e:
+        print(f"오류: 그래프 실행 중 예외 발생 - {e}")
+        final_state = initial_state 
+        final_state["error_message"] = f"Graph execution error: {str(e)}" # str(e)로 변경
+        final_state["final_report"] = {
+            "summary": "진단 프로세스 실행 중 오류 발생",
+            "error_details": f"Graph execution error: {str(e)}", # str(e)로 변경
+            "status": "Execution Error"
+        }
 
-# 예제 실행 코드
-if __name__ == "__main__":
-    # 예제 입력 데이터
-    service_url = "https://daglo.ai/guide"
-    documents = ["./data/daglo_guide.pdf"]
+    print("진단 워크플로우 실행 완료.")
     
-    # 약관 및 개인정보처리방침 (실제로는 파일에서 읽어오거나 웹에서 가져옴)
-    with open("./data/daglo_terms.txt", "r", encoding="utf-8") as f:
-        terms_text = f.read()
+    if final_state is None:
+        print("오류: 그래프 실행 후 최종 상태가 없습니다.")
+        return {"error": "Graph execution resulted in no final state."}
+
+    # 최종 상태 전체를 저장하는 로직 (ReportComposerAgent가 생성한 파일과 별개로)
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+        output_service_name = os.path.basename(os.path.normpath(service_data_dir))
+        final_state_json_path = os.path.join(output_dir, f"ethics_assessment_final_state_{output_service_name}.json")
+        
+        # Langchain 객체 등 직렬화 불가능한 객체를 상태에서 제거하거나 변환하는 로직 추가 가능
+        # 예: final_state_to_save = {k: v for k, v in final_state.items() if k not in ['llm', 'retriever']}
+        # 여기서는 default=str을 사용하여 최대한 저장 시도
+        with open(final_state_json_path, 'w', encoding='utf-8') as f:
+            json.dump(final_state, f, ensure_ascii=False, indent=2, default=str) 
+        print(f"전체 최종 상태 (JSON): {os.path.abspath(final_state_json_path)}")
+    except Exception as e:
+        print(f"오류: 최종 상태 JSON 저장 실패 - {e}")
+
+
+    # 화면에 요약 및 보고서 경로 출력
+    print("\n===== AI 윤리 리스크 진단 결과 요약 =====")
+    if final_state.get("error_message"): 
+        print(f"오류로 인해 파이프라인이 정상적으로 완료되지 못했습니다: {final_state.get('error_message')}")
     
-    privacy_policy_text = terms_text  # 예제에서는 동일한 텍스트 사용
-    
-    # 윤리 평가 실행
-    result = run_ethics_assessment(
-        service_url=service_url,
-        documents=documents,
-        terms_text=terms_text,
-        privacy_policy_text=privacy_policy_text
-    )
-    
-    # 결과 출력
-    print("\n===== AI 윤리 리스크 진단 결과 =====")
-    print(f"요약: {result['final_report'].get('summary', '요약 정보 없음')}")
-    print(f"보고서 경로: {result['final_report'].get('report_markdown', '보고서 경로 없음')}")
-    
-    # JSON 결과 저장
-    with open(result['final_report'].get('report_json', './outputs/result.json'), 'w', encoding='utf-8') as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
-    
+    final_report_info = final_state.get("final_report", {})
+    if isinstance(final_report_info, dict):
+        print(f"요약: {final_report_info.get('summary', '요약 정보 없음 (또는 오류 발생)')}")
+        # ReportComposerAgent가 반환한 report_markdown 경로 사용 (output_dir 기준일 수 있음)
+        report_md_path = final_report_info.get('report_markdown', '보고서 경로 없음')
+        if report_md_path and os.path.exists(report_md_path): # 경로가 None이 아니고 실제 존재하는지
+             print(f"보고서 (Markdown): {os.path.abspath(report_md_path)}")
+        elif report_md_path: # 경로는 있으나 파일이 없을 경우
+            print(f"보고서 (Markdown): 파일이 생성되지 않았거나 경로가 잘못되었습니다 - {report_md_path}")
+        else: # 경로 정보 자체가 없을 경우
+            print(f"보고서 (Markdown): 생성되지 않음 (오류 또는 정보 없음)")
+            
+        if final_report_info.get("status") == "Error" or final_report_info.get("status") == "Failed":
+            print(f"오류 상세: {final_report_info.get('error_details', final_report_info.get('error', '상세 정보 없음'))}")
+
+    else:
+        print("최종 보고서 정보를 찾을 수 없거나 형식이 올바르지 않습니다.")
+
     print("\n평가가 완료되었습니다. 자세한 내용은 생성된 보고서를 확인하세요.")
+    return final_state
+
+
+def main():
+    parser = argparse.ArgumentParser(description="AI 윤리 리스크 진단 파이프라인 실행 도구")
+    parser.add_argument("--service_data_dir", type=str, required=True, 
+                        help="분석 대상 서비스의 문서(PDF)가 포함된 디렉토리 경로. 윤리 가이드라인 PDF도 이 폴더에 함께 위치해야 RAG 대상이 됩니다.")
+    parser.add_argument("--guideline_docs", nargs="*", default=[],
+                        help="참고할 윤리 가이드라인 PDF 문서 경로 목록 (선택 사항, 공백으로 구분). service_data_dir과 다른 경로에 있을 경우 지정. (현재 Retriever는 service_data_dir만 사용하므로, 가이드라인 문서도 해당 폴더에 위치시키는 것을 권장)")
+    parser.add_argument("--guideline_keyword", type=str, default="OECD",
+                        help="EthicalRiskAgent가 RAG 쿼리 시 참조할 가이드라인 문서의 키워드 (기본값: OECD).")
+    parser.add_argument("--url", type=str, default=None,
+                        help="분석 대상 서비스의 URL (선택 사항).")
+    parser.add_argument("--k_results", type=int, default=3, 
+                        help="RAG 검색 시 가져올 문서 청크 수 (기본값: 3).")
+    parser.add_argument("--output_dir", type=str, default="./outputs", 
+                        help="결과 보고서 및 JSON 파일을 저장할 디렉토리 (기본값: ./outputs).")
+
+    args = parser.parse_args()
+    
+    guideline_absolute_paths = [os.path.abspath(p) for p in args.guideline_docs] if args.guideline_docs else []
+
+    result_state = run_ethics_assessment_pipeline(
+        service_data_dir=os.path.abspath(args.service_data_dir), 
+        guideline_doc_paths=guideline_absolute_paths, # 이 경로의 파일들도 service_data_dir에 있어야 RAG 대상이 됨
+        service_url=args.url,
+        retriever_k_results=args.k_results,
+        output_dir=os.path.abspath(args.output_dir), 
+        guideline_keyword=args.guideline_keyword
+    )
+    print("\n===== AI 윤리 리스크 진단 결과 요약 =====")
+    if result_state.get("error_message"): 
+        print(f"오류로 인해 파이프라인이 정상적으로 완료되지 못했습니다: {result_state.get('error_message')}")
+    
+    final_report_info = result_state.get("final_report", {})
+    if isinstance(final_report_info, dict):
+        print(f"요약: {final_report_info.get('summary', '요약 정보 없음 (또는 오류 발생)')}")
+        report_md_path = final_report_info.get('report_markdown_abs', final_report_info.get('report_markdown', '보고서 경로 없음'))
+        if os.path.exists(str(report_md_path)): 
+             print(f"보고서 (Markdown): {report_md_path}")
+        else:
+            print(f"보고서 (Markdown): 경로를 찾을 수 없거나 생성되지 않음 - {report_md_path}")
+    else:
+        print("최종 보고서 정보를 찾을 수 없거나 형식이 올바르지 않습니다.")
+
+    print("\n평가가 완료되었습니다. 자세한 내용은 생성된 보고서를 확인하세요.")
+
+
+
+if __name__ == "__main__":
+    main()

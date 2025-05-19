@@ -1,0 +1,16 @@
+다음은 AI 서비스에 대한 종합적인 분석 결과입니다. 이 모든 정보를 바탕으로, 시스템 프롬프트에서 제시된 구조와 형식에 따라 완전한 Markdown 보고서를 작성해주십시오. 보고서 상단에는 반드시 전체 내용을 요약하는 "SUMMARY" 섹션을 포함해야 합니다.
+
+[서비스 정보]
+{service_info_json_str}
+
+[윤리적 리스크 평가 결과]
+{ethical_risks_json_str}
+
+[독소조항 분석 결과]
+{toxic_clauses_json_str} 
+(참고: 위 JSON에는 'toxic_clauses' 리스트와 'overall_clause_risk'가 포함되어 있습니다.)
+
+[개선 방안 제안]
+{recommendations_json_str}
+
+위 모든 정보를 종합하여, 전문적이고 체계적인 Markdown 보고서를 생성해주십시오.
