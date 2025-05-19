@@ -1,0 +1,20 @@
+# AI 윤리 리스크 진단 멀티에이전트 시스템 의존성 패키지
+
+# 기본 패키지
+python-dotenv>=1.0.0
+
+# LangChain 및 LangGraph
+langchain>=0.1.0
+langchain-openai>=0.0.5
+langgraph>=0.0.20
+
+# 문서 처리
+pymupdf>=1.23.0
+unstructured>=0.11.0
+
+# 벡터 저장소
+chroma>=0.2.0
+
+# 유틸리티
+pydantic>=2.5.0
+textwrap
