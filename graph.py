@@ -200,8 +200,6 @@ def build_ethics_assessment_graph(
         }
     )
     
-    # report_composition 노드는 내부적으로 오류를 처리하고 final_report에 상태를 기록하므로,
-    # 여기서 별도의 오류 분기 없이 바로 END로 연결.
     workflow.add_edge("report_composition", END)
     workflow.add_edge("handle_fatal_error", END) 
     

@@ -29,45 +29,77 @@ class ToxicClauseAgent:
             raise FileNotFoundError(f"{agent_name}: 사용자 프롬프트 템플릿 파일을 로드할 수 없습니다. 경로: {user_prompt_template_path}")
 
     def _get_rag_context_for_legal_analysis(self, service_info: Dict[str, Any], documents_to_consider: List[str]) -> str:
-        """서비스의 약관, 개인정보처리방침 등 법적 문서 관련 내용을 RAG로 검색합니다."""
+        """서비스의 약관, 개인정보처리방침 등 법적 문서 관련 내용을 각 키워드별로 RAG 검색하여 취합합니다."""
         if not self.retriever:
             return "Retriever가 제공되지 않아 약관/개인정보 관련 컨텍스트를 가져올 수 없습니다.\n"
-        
-        service_name = service_info.get("service_name", "해당 서비스")
-        query_keywords = ["이용약관", "서비스 약관", "개인정보 처리방침", "개인정보 보호정책", "데이터 사용 정책", "사용자 권리", "책임 제한", "면책 조항", "계약 변경", "서비스 중단"]
-        query = f"'{service_name}' 서비스의 공식 문서 또는 웹사이트 내용 중 다음 키워드와 관련된 법적 조항, 정책, 또는 사용자에게 영향을 미칠 수 있는 중요한 고지 사항을 찾아주세요: {', '.join(query_keywords)}."
-        
-        if documents_to_consider: # documents는 PDF 파일 경로 리스트
-            doc_names = ", ".join([os.path.basename(doc_path) for doc_path in documents_to_consider])
-            query += f" (주요 참고 문서: {doc_names})"
-            
-        print(f"ToxicClauseAgent: RAG 쿼리 - \"{query[:250]}...\"") # 쿼리 길이 제한 출력
-        
-        try:
-            if hasattr(self.retriever, 'invoke'):
-                relevant_docs = self.retriever.invoke(query)
-            elif hasattr(self.retriever, 'get_relevant_documents'):
-                relevant_docs = self.retriever.get_relevant_documents(query)
-            else:
-                return "Retriever에 적절한 검색 메소드가 없습니다.\n"
-        except Exception as e:
-            return f"RAG 컨텍스트 검색 중 오류 발생 ({e})\n"
-            
-        context_str = "## 서비스 약관 및 개인정보 처리방침 관련 문서 컨텍스트 (RAG 결과):\n"
-        if not relevant_docs:
-            context_str += "  관련된 법적 내용을 문서에서 찾을 수 없습니다.\n"
-            return context_str
 
-        for i, doc in enumerate(relevant_docs):
-            source_file = doc.metadata.get('source_file', doc.metadata.get('source', 'N/A'))
-            page_num = doc.metadata.get('page', 'N/A')
-            section_title = doc.metadata.get('section_title', 'N/A') # indexer.py에서 추가한 메타데이터
-            context_str += (
-                f"  --- 컨텍스트 {i+1} (출처: {source_file}, 페이지: {page_num}, 섹션: {section_title}) ---\n"
-                f"  {doc.page_content[:250].replace(chr(0), '')}...\n" # 컨텍스트 길이 약간 늘림, NULL 바이트 제거
+        service_name = service_info.get("service_name", "해당 서비스")
+        # 검색할 주요 법적 키워드 리스트
+        query_keywords = [
+            "이용약관", "서비스 약관", "개인정보 처리방침", "개인정보 보호정책",
+            "데이터 수집", "데이터 이용", "데이터 제공", "데이터 파기",
+            "사용자 권리", "정보주체 권리", "책임 제한", "면책 조항",
+            "계약의 변경", "서비스 변경", "서비스 중단", "계정 정지", "해지"
+        ]
+
+        # 문서 경로가 있다면 쿼리에 포함시킬 문서명 문자열 생성
+        doc_names_suffix = ""
+        if documents_to_consider:
+            doc_names = ", ".join([os.path.basename(doc_path) for doc_path in documents_to_consider])
+            doc_names_suffix = f" (주요 참고 문서: {doc_names})"
+
+        # 최종 컨텍스트 문자열을 빌드하기 위한 리스트
+        all_contexts_parts = ["## 서비스 약관 및 개인정보 처리방침 관련 문서 컨텍스트 (키워드별 RAG 결과):\n"]
+        found_any_context_overall = False
+
+        for keyword in query_keywords:
+            # 각 키워드에 대한 spezifische 쿼리 생성
+            query = (
+                f"'{service_name}' 서비스의 공식 문서 또는 웹사이트 내용 중 "
+                f"'{keyword}' 키워드와 관련된 법적 조항, 정책, 또는 사용자에게 영향을 미칠 수 있는 중요한 고지 사항을 찾아주세요."
+                f"{doc_names_suffix}"
             )
-            print(context_str) # 디버깅용 출력 (항목별 컨텍스트)
-        return context_str + "\n"
+
+            print(f"ToxicClauseAgent: RAG 쿼리 (키워드: {keyword}) - \"{query[:200]}...\"")
+
+            relevant_docs_for_keyword = []
+            try:
+                if hasattr(self.retriever, 'invoke'):
+                    relevant_docs_for_keyword = self.retriever.invoke(query)
+                elif hasattr(self.retriever, 'get_relevant_documents'):
+                    relevant_docs_for_keyword = self.retriever.get_relevant_documents(query)
+                else:
+                    all_contexts_parts.append(f"\n### '{keyword}' 관련 내용:\n")
+                    all_contexts_parts.append("  - Retriever에 적절한 검색 메소드가 없어 컨텍스트를 가져올 수 없습니다.\n")
+                    continue # 다음 키워드로 넘어감
+            except Exception as e:
+                all_contexts_parts.append(f"\n### '{keyword}' 관련 내용:\n")
+                all_contexts_parts.append(f"  - RAG 컨텍스트 검색 중 오류 발생 ({e})\n")
+                continue # 다음 키워드로 넘어감
+
+            if relevant_docs_for_keyword:
+                found_any_context_overall = True
+                all_contexts_parts.append(f"\n### '{keyword}' 관련 내용:\n")
+                for i, doc in enumerate(relevant_docs_for_keyword):
+                    source_file = doc.metadata.get('source_file', doc.metadata.get('source', 'N/A'))
+                    page_num = doc.metadata.get('page', 'N/A')
+                    section_title = doc.metadata.get('section_title', 'N/A')
+                    content_preview = doc.page_content.replace(chr(0), '').strip()[:300] # NULL 바이트 제거 및 미리보기 길이 조정
+
+                    all_contexts_parts.append(
+                        f"  --- 컨텍스트 {i+1} (출처: {source_file}, 페이지: {page_num}, 섹션: {section_title}) ---\n"
+                        f"  {content_preview}...\n"
+                    )
+                    # 개별 문서 컨텍스트 출력은 너무 길어질 수 있으므로, 필요시 주석 해제하여 디버깅
+                    # print(f"Debug: Keyword='{keyword}', Source='{source_file}', Page='{page_num}', Content='{content_preview[:50]}...'")
+            else:
+                all_contexts_parts.append(f"\n### '{keyword}' 관련 내용:\n")
+                all_contexts_parts.append("  - 해당 키워드로 검색된 관련 법적 내용을 문서에서 찾을 수 없습니다.\n")
+
+        if not found_any_context_overall and len(all_contexts_parts) == 1: # 헤더만 있고, 어떤 키워드 결과도 (오류 포함) 추가되지 않은 경우
+             all_contexts_parts.append("  모든 키워드에 대해 관련된 법적 내용을 문서에서 찾을 수 없었습니다.\n")
+
+        return "".join(all_contexts_parts) + "\n"
 
     def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
         print("ToxicClauseAgent 실행 시작...")

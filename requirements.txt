@@ -21,3 +21,7 @@ chromadb
 
 # 유틸리티
 pydantic>=2.5.0
+
+# Markdown to PDF 변환
+weasyprint
+markdown

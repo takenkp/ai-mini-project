@@ -22,8 +22,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # 📁 설정
-PDF_DIR = "./data/daglo/"  # indexer.py 파일 위치 기준 상대 경로
-CHROMA_DIR = "./vectorstore/chroma_daglo" # indexer.py 파일 위치 기준 상대 경로
+PDF_DIR = "./data/claude/"  # indexer.py 파일 위치 기준 상대 경로
+CHROMA_DIR = "./vectorstore/chroma_claude" # indexer.py 파일 위치 기준 상대 경로
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 CHUNK_SIZE = 250
 CHUNK_OVERLAP = 50
