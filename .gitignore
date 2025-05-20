@@ -6,6 +6,8 @@ alembic.ini
 vector_db/chroma.sqlite3
 vectorstore/*/
 
+.DS_Store
+
 ### Python ###
 # Byte-compiled / optimized / DLL files
 __pycache__/
