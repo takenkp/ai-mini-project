@@ -79,6 +79,8 @@ def run_ethics_assessment_pipeline(
             guideline_keyword_for_ethics=guideline_keyword,
             report_output_dir=output_dir
         )
+        print(graph.get_graph().draw_mermaid())
+
     except FileNotFoundError as e: 
         print(f"오류: 그래프 빌드 실패 (필수 프롬프트 파일 누락 가능성) - {e}")
         return {"error": f"Graph build failed due to missing file: {e}"}
