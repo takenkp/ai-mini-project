@@ -25,8 +25,8 @@ load_dotenv()
 PDF_DIR = "./data/daglo/"  # indexer.py 파일 위치 기준 상대 경로
 CHROMA_DIR = "./vectorstore/chroma_daglo" # indexer.py 파일 위치 기준 상대 경로
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-CHUNK_SIZE = 500
-CHUNK_OVERLAP = 100
+CHUNK_SIZE = 250
+CHUNK_OVERLAP = 50
 # 폰트 기반 제목 추론을 위한 임계값
 TITLE_FONT_SIZE_MIN_DIFFERENCE = 1.5 # 일반 텍스트보다 최소 이만큼 커야 제목으로 간주 (절대값)
 TITLE_FONT_SIZE_MIN_RATIO = 1.15    # 일반 텍스트보다 최소 이 비율만큼 커야 제목으로 간주 (비율)

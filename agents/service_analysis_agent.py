@@ -7,17 +7,7 @@ from langchain.schema import HumanMessage, SystemMessage
 from langchain.schema.runnable import Runnable
 from langchain.retrievers.ensemble import EnsembleRetriever # EnsembleRetriever 타입 힌트를 위해 직접 임포트
 
-def load_prompt_from_file(file_path: str) -> str:
-    """지정된 경로의 파일에서 프롬프트 내용을 읽어 반환합니다."""
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            return f.read()
-    except FileNotFoundError:
-        print(f"오류: 프롬프트 파일을 찾을 수 없습니다 - {file_path}")
-        return ""
-    except Exception as e:
-        print(f"오류: 프롬프트 파일 로드 중 문제 발생 - {file_path}: {e}")
-        return ""
+from utils.load_prompt import load_prompt_from_file
 
 class ServiceAnalysisAgent:
     """서비스 분석 에이전트
@@ -97,8 +87,9 @@ class ServiceAnalysisAgent:
             section_title = doc.metadata.get('section_title', 'N/A')
             context_str += (
                 f"    --- 컨텍스트 {i+1} (출처: {source_file}, 페이지: {page_num}, 섹션: {section_title}) ---\n"
-                f"    {doc.page_content[:300]}...\n" # 컨텍스트 길이 제한
+                f"    {doc.page_content[:250]}...\n" # 컨텍스트 길이 제한
             )
+            print(context_str) # 디버깅용 출력 (항목별 컨텍스트)
         return context_str + "\n"
 
     def _get_comprehensive_rag_context(self, service_url: str, documents_to_consider: List[str]) -> str:
@@ -108,9 +99,7 @@ class ServiceAnalysisAgent:
             comprehensive_context += "Retriever가 제공되지 않아 RAG를 수행할 수 없습니다.\n"
             return comprehensive_context
 
-        for item_key, item_desc_for_query in self.info_items_for_rag.items():
-            # 실제 LLM에게 전달될 프롬프트에는 item_key가 아니라 item_desc_for_query가 더 유용할 수 있음
-            # 여기서는 item_desc_for_query를 RAG 쿼리 생성에 사용
+        for item_desc_for_query in self.info_items_for_rag.items():
             context_for_item = self._get_single_item_rag_context(item_desc_for_query, service_url, documents_to_consider)
             comprehensive_context += context_for_item
         

@@ -7,19 +7,7 @@ from langchain.schema import HumanMessage, SystemMessage
 from langchain.schema.runnable import Runnable
 from langchain.retrievers.ensemble import EnsembleRetriever
 
-def load_prompt_from_file(file_path: str) -> str:
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            return f.read()
-    except FileNotFoundError:
-        agent_name = os.path.splitext(os.path.basename(__file__))[0]
-        print(f"오류({agent_name}): 프롬프트 파일을 찾을 수 없습니다 - {file_path}")
-        # 호출하는 쪽에서 이 빈 문자열을 확인하고 예외 발생시킴
-        return "" 
-    except Exception as e:
-        agent_name = os.path.splitext(os.path.basename(__file__))[0]
-        print(f"오류({agent_name}): 프롬프트 파일 로드 중 문제 발생 - {file_path}: {e}")
-        return ""
+from utils.load_prompt import load_prompt_from_file
 
 class ToxicClauseAgent:
     """독소조항 탐지 에이전트 (RAG 적용, terms/privacy 텍스트 직접 입력 받지 않음)"""
@@ -53,7 +41,7 @@ class ToxicClauseAgent:
             doc_names = ", ".join([os.path.basename(doc_path) for doc_path in documents_to_consider])
             query += f" (주요 참고 문서: {doc_names})"
             
-        print(f"ToxicClauseAgent: RAG 쿼리 - \"{query[:200]}...\"") # 쿼리 길이 제한 출력
+        print(f"ToxicClauseAgent: RAG 쿼리 - \"{query[:250]}...\"") # 쿼리 길이 제한 출력
         
         try:
             if hasattr(self.retriever, 'invoke'):
@@ -76,8 +64,9 @@ class ToxicClauseAgent:
             section_title = doc.metadata.get('section_title', 'N/A') # indexer.py에서 추가한 메타데이터
             context_str += (
                 f"  --- 컨텍스트 {i+1} (출처: {source_file}, 페이지: {page_num}, 섹션: {section_title}) ---\n"
-                f"  {doc.page_content[:350].replace(chr(0), '')}...\n" # 컨텍스트 길이 약간 늘림, NULL 바이트 제거
+                f"  {doc.page_content[:250].replace(chr(0), '')}...\n" # 컨텍스트 길이 약간 늘림, NULL 바이트 제거
             )
+            print(context_str) # 디버깅용 출력 (항목별 컨텍스트)
         return context_str + "\n"
 
     def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
